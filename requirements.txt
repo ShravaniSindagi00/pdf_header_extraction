@@ -34,3 +34,7 @@ rich==13.7.0
 # Optional: For machine learning enhancements
 # scikit-learn==1.3.2
 # transformers==4.35.2
+
+# Add these for OCR functionality
+pytesseract
+Pillow

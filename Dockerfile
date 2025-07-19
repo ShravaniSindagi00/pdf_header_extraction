@@ -4,10 +4,12 @@ FROM --platform=linux/amd64 python:3.9-slim
 # Set working directory
 WORKDIR /app
 
-# 2. Install build dependencies, build wheels, and then remove build deps in one layer
-# This keeps the final image smaller.
+# 2. Install build and system dependencies (including Tesseract OCR)
 COPY requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    tesseract-ocr \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y --auto-remove gcc g++ \
     && apt-get clean \
