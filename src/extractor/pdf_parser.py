@@ -1,17 +1,16 @@
 """
 PDF Parser - Extract text, font information, and layout data from PDF files.
-
-This module uses PyMuPDF (fitz) for fast PDF parsing and intelligently uses
-pdfplumber for detailed analysis only on critical pages to ensure performance.
+Includes OCR fallback for scanned documents.
 """
 
 import logging
-import re
 from pathlib import Path
 from typing import List
 import fitz  # PyMuPDF
-import pdfplumber
 import numpy as np
+import pytesseract
+from PIL import Image
+import io
 
 from models.document import Document, TextBlock, FontInfo
 from config.settings import Settings
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 class PDFParser:
     """
     High-performance PDF parser that extracts text blocks with detailed
-    font and positioning information.
+    font and positioning information, with OCR fallback for scanned pages.
     """
 
     def __init__(self, settings: Settings):
@@ -29,32 +28,33 @@ class PDFParser:
 
     def parse(self, pdf_path: Path) -> Document:
         """
-        Parse a PDF file and extract all text blocks with metadata.
+        Parse a PDF file, attempting direct text extraction first, then OCR.
         """
         try:
             logger.debug(f"Starting to parse PDF: {pdf_path}")
             document = Document(filename=pdf_path.name, filepath=str(pdf_path))
             
-            # Use PyMuPDF for fast, initial text extraction
             with fitz.open(pdf_path) as pdf_doc:
                 document.page_count = len(pdf_doc)
                 document.page_dimensions = [(page.rect.width, page.rect.height) for page in pdf_doc]
                 
                 all_text_blocks = []
                 for page_num, page in enumerate(pdf_doc):
-                    all_text_blocks.extend(self._extract_page_blocks(page, page_num + 1))
+                    page_number = page_num + 1
+                    text_blocks = self._extract_text_blocks_from_page(page, page_number)
+                    
+                    # If a page has very little text, it's likely scanned. Try OCR.
+                    total_text_length = sum(len(block.text) for block in text_blocks)
+                    if total_text_length < 50: # Threshold for considering a page "scanned"
+                        logger.debug(f"Page {page_number} has little text. Attempting OCR...")
+                        ocr_blocks = self._ocr_page(page, page_number)
+                        all_text_blocks.extend(ocr_blocks)
+                    else:
+                        all_text_blocks.extend(text_blocks)
+                        
                 document.text_blocks = all_text_blocks
 
-            # First, calculate statistics from the initial parse
             self._calculate_document_stats(document)
-
-            # NEW: Detect the document's language
-            document.language = self._detect_language(document)
-            logger.info(f"Detected document language: {document.language}")
-            
-            # OPTIMIZATION: Intelligently enhance font analysis only on important pages
-            self._enhance_font_analysis(document, pdf_path)
-            
             logger.info(f"Parsed {len(document.text_blocks)} text blocks from {document.page_count} pages")
             return document
             
@@ -62,33 +62,8 @@ class PDFParser:
             logger.error(f"Failed to parse PDF {pdf_path}: {str(e)}")
             raise
 
-    def _detect_language(self, document: Document) -> str:
-        """
-        Detect the primary language of the document by checking character ranges.
-        This is a simple heuristic and can be expanded.
-        """
-        japanese_chars = 0
-        total_chars = 0
-        
-        # Check a sample of text blocks for Japanese characters
-        for block in document.text_blocks[:100]: # Check first 100 blocks
-            for char in block.text:
-                total_chars += 1
-                # Check if the character is in the common Japanese Unicode ranges
-                # (Hiragana, Katakana, CJK Unified Ideographs)
-                if '\u3040' <= char <= '\u309F' or \
-                   '\u30A0' <= char <= '\u30FF' or \
-                   '\u4E00' <= char <= '\u9FFF':
-                    japanese_chars += 1
-        
-        if total_chars > 0 and (japanese_chars / total_chars) > 0.1:
-            return 'japanese' # If more than 10% of chars are Japanese
-        
-        return 'english' # Default
-
-
-    def _extract_page_blocks(self, page: fitz.Page, page_num: int) -> List[TextBlock]:
-        """Extract text blocks from a single page using PyMuPDF."""
+    def _extract_text_blocks_from_page(self, page: fitz.Page, page_num: int) -> List[TextBlock]:
+        """Extracts text directly from the PDF's text layer."""
         text_blocks = []
         try:
             blocks = page.get_text("dict").get("blocks", [])
@@ -113,65 +88,59 @@ class PDFParser:
                             font_info=font_info
                         ))
         except Exception as e:
-            logger.warning(f"Error extracting blocks from page {page_num}: {str(e)}")
+            logger.warning(f"Error extracting direct text from page {page_num}: {str(e)}")
         return text_blocks
+
+    def _ocr_page(self, page: fitz.Page, page_num: int) -> List[TextBlock]:
+        """
+        Performs OCR on a page image to extract text from scanned documents.
+        NOTE: This loses detailed font and position info for individual words.
+        """
+        ocr_blocks = []
+        try:
+            # Render page to an image
+            pix = page.get_pixmap(dpi=300)
+            img = Image.open(io.BytesIO(pix.tobytes()))
+            
+            # Use pytesseract to get text data
+            ocr_text = pytesseract.image_to_string(img)
+            
+            if ocr_text.strip():
+                # Since OCR doesn't give us font info, we create one large text block
+                # for the whole page with default font properties.
+                default_font = FontInfo(family="OCR", size=12.0, flags=0, color="#000000")
+                page_width, page_height = page.rect.width, page.rect.height
+                
+                # We can split the text by line to create multiple blocks
+                for line in ocr_text.splitlines():
+                    if line.strip():
+                        ocr_blocks.append(TextBlock(
+                            text=line.strip(),
+                            page=page_num,
+                            x=0, y=0, # Position is unknown from OCR
+                            width=page_width, height=12, # A-best guess for height
+                            font_info=default_font
+                        ))
+                logger.debug(f"Successfully extracted {len(ocr_blocks)} lines of text via OCR from page {page_num}")
+        except Exception as e:
+            logger.error(f"OCR failed for page {page_num}: {e}")
+        return ocr_blocks
+
 
     def _calculate_document_stats(self, document: Document) -> None:
         """Calculate document-wide statistics for heading detection."""
         if not document.text_blocks: return
         
-        font_sizes = [b.font_info.size for b in document.text_blocks if b.font_info.size > 0]
+        font_sizes = [b.font_info.size for b in document.text_blocks if b.font_info.size > 0 and b.font_info.family != "OCR"]
         document.avg_font_size = np.mean(font_sizes) if font_sizes else 12.0
         
-        font_families = [b.font_info.family for b in document.text_blocks]
+        font_families = [b.font_info.family for b in document.text_blocks if b.font_info.family != "OCR"]
         if font_families:
             from collections import Counter
             document.primary_font = Counter(font_families).most_common(1)[0][0]
         
         logger.debug(f"Document stats - Avg font size: {document.avg_font_size:.1f}, Primary font: {document.primary_font}")
 
-    def _enhance_font_analysis(self, document: Document, pdf_path: Path) -> None:
-        """
-        Use pdfplumber for more detailed font analysis ONLY on key pages.
-        This performance optimization prevents slowdowns on large documents.
-        """
-        # pdfplumber is generally better for CJK languages, so we might use it more
-        if document.language == 'japanese':
-            # For Japanese, we might want to analyze more pages
-            key_pages = set(range(1, min(6, document.page_count + 1))) # First 5 pages
-        else:
-            # For English, stick to the optimized strategy
-            key_pages = set()
-            for block in document.text_blocks:
-                if block.font_info.size > (document.avg_font_size * 1.5):
-                    key_pages.add(block.page)
-        
-        if not key_pages:
-            logger.debug("No key pages found for detailed analysis. Skipping.")
-            return
-
-        logger.debug(f"Performing detailed font analysis on {len(key_pages)} key pages: {sorted(list(key_pages))}")
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                for page_num in key_pages:
-                    if page_num <= len(pdf.pages):
-                        page = pdf.pages[page_num - 1]
-                        for block in document.text_blocks:
-                            if block.page == page_num:
-                                self._update_block_font_info(block, page.chars)
-        except Exception as e:
-            logger.warning(f"Detailed font enhancement failed: {str(e)}")
-
-    def _update_block_font_info(self, block: TextBlock, page_chars: List[dict]):
-        """Find matching chars in pdfplumber data to get more accurate font names."""
-        matching_chars = [
-            char for char in page_chars
-            if (abs(char['x0'] - block.x) < 5 and abs(char['top'] - block.y) < 5)
-        ]
-        
-        if matching_chars:
-            best_char = matching_chars[0]
-            block.font_info.family = best_char.get('fontname', block.font_info.family)
 
     def _rgb_to_hex(self, color_int: int) -> str:
         """Convert RGB integer to hex color string."""
