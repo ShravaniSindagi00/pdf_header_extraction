@@ -6,6 +6,7 @@ pdfplumber for detailed analysis only on critical pages to ensure performance.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import List
 import fitz  # PyMuPDF
@@ -46,6 +47,10 @@ class PDFParser:
 
             # First, calculate statistics from the initial parse
             self._calculate_document_stats(document)
+
+            # NEW: Detect the document's language
+            document.language = self._detect_language(document)
+            logger.info(f"Detected document language: {document.language}")
             
             # OPTIMIZATION: Intelligently enhance font analysis only on important pages
             self._enhance_font_analysis(document, pdf_path)
@@ -56,6 +61,31 @@ class PDFParser:
         except Exception as e:
             logger.error(f"Failed to parse PDF {pdf_path}: {str(e)}")
             raise
+
+    def _detect_language(self, document: Document) -> str:
+        """
+        Detect the primary language of the document by checking character ranges.
+        This is a simple heuristic and can be expanded.
+        """
+        japanese_chars = 0
+        total_chars = 0
+        
+        # Check a sample of text blocks for Japanese characters
+        for block in document.text_blocks[:100]: # Check first 100 blocks
+            for char in block.text:
+                total_chars += 1
+                # Check if the character is in the common Japanese Unicode ranges
+                # (Hiragana, Katakana, CJK Unified Ideographs)
+                if '\u3040' <= char <= '\u309F' or \
+                   '\u30A0' <= char <= '\u30FF' or \
+                   '\u4E00' <= char <= '\u9FFF':
+                    japanese_chars += 1
+        
+        if total_chars > 0 and (japanese_chars / total_chars) > 0.1:
+            return 'japanese' # If more than 10% of chars are Japanese
+        
+        return 'english' # Default
+
 
     def _extract_page_blocks(self, page: fitz.Page, page_num: int) -> List[TextBlock]:
         """Extract text blocks from a single page using PyMuPDF."""
@@ -105,15 +135,19 @@ class PDFParser:
         Use pdfplumber for more detailed font analysis ONLY on key pages.
         This performance optimization prevents slowdowns on large documents.
         """
-        # Find pages that contain text significantly larger than the average.
-        # These are the only pages where detailed analysis is likely to be useful.
-        key_pages = set()
-        for block in document.text_blocks:
-            if block.font_info.size > (document.avg_font_size * 1.5):
-                key_pages.add(block.page)
+        # pdfplumber is generally better for CJK languages, so we might use it more
+        if document.language == 'japanese':
+            # For Japanese, we might want to analyze more pages
+            key_pages = set(range(1, min(6, document.page_count + 1))) # First 5 pages
+        else:
+            # For English, stick to the optimized strategy
+            key_pages = set()
+            for block in document.text_blocks:
+                if block.font_info.size > (document.avg_font_size * 1.5):
+                    key_pages.add(block.page)
         
         if not key_pages:
-            logger.debug("No key pages with large fonts found for detailed analysis. Skipping.")
+            logger.debug("No key pages found for detailed analysis. Skipping.")
             return
 
         logger.debug(f"Performing detailed font analysis on {len(key_pages)} key pages: {sorted(list(key_pages))}")
@@ -122,7 +156,6 @@ class PDFParser:
                 for page_num in key_pages:
                     if page_num <= len(pdf.pages):
                         page = pdf.pages[page_num - 1]
-                        # Find blocks on this page and update their font info
                         for block in document.text_blocks:
                             if block.page == page_num:
                                 self._update_block_font_info(block, page.chars)
@@ -131,14 +164,12 @@ class PDFParser:
 
     def _update_block_font_info(self, block: TextBlock, page_chars: List[dict]):
         """Find matching chars in pdfplumber data to get more accurate font names."""
-        # Find characters that are spatially close to the start of the block
         matching_chars = [
             char for char in page_chars
             if (abs(char['x0'] - block.x) < 5 and abs(char['top'] - block.y) < 5)
         ]
         
         if matching_chars:
-            # Use the font name from the first matching character
             best_char = matching_chars[0]
             block.font_info.family = best_char.get('fontname', block.font_info.family)
 

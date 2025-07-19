@@ -33,11 +33,11 @@ class Document:
     page_count: int = 0
     processed_at: datetime = field(default_factory=datetime.now)
     text_blocks: List[TextBlock] = field(default_factory=list)
-    
+    language: str = "english" # NEW: Language of the document
+
     # Statistics for analysis
     avg_font_size: float = 0.0
     median_font_size: float = 0.0
     font_size_std: float = 0.0
     primary_font: str = "Unknown"
-    # NEW: Store page dimensions for layout analysis
     page_dimensions: List[Tuple[float, float]] = field(default_factory=list)
