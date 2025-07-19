@@ -1,8 +1,3 @@
-Of course. Here is a comprehensive and professional `README.md` file for your project.
-
-This README accurately reflects all the advanced features you've built, including the OCR capabilities, multilingual support, and external configuration. Just copy and paste this into the `README.md` file in your project's root directory.
-
------
 
 # PDF Outline Extractor
 
@@ -10,7 +5,7 @@ This project is a high-performance, intelligent solution for automatically extra
 
 This solution was built to handle a wide variety of PDF formats, from simple text-based documents to complex, image-based scanned files, and even includes support for multiple languages.
 
-## Key Features
+## Key Features ✨
 
   * **Advanced Heuristic-Based Detection**: Goes beyond simple font size analysis by incorporating text position, layout, whitespace, numbering patterns, and font weight to accurately identify headings.
   * **OCR Fallback for Scanned PDFs**: Automatically detects image-based pages with little to no text and uses the Tesseract OCR engine to extract content, ensuring even scanned documents can be processed.
@@ -19,7 +14,7 @@ This solution was built to handle a wide variety of PDF formats, from simple tex
   * **External Configuration**: Key parameters like heading confidence thresholds can be easily tuned via an external `config.json` file without modifying the source code.
   * **Dockerized and Secure**: The entire application is containerized with Docker, using a non-root user and best practices for small, secure, and reproducible builds.
 
-## The Approach
+## The Approach ⚙️
 
 The extraction process is handled by a sophisticated three-stage pipeline:
 
@@ -33,7 +28,7 @@ The extraction process is handled by a sophisticated three-stage pipeline:
 
 3.  **Outline Building (`outline_builder.py`)**: Once the headings are identified and scored, this module takes the flat list, sorts it into the correct reading order, and validates the hierarchy (e.g., ensuring an H3 follows an H2). It then constructs the final, clean JSON output in the required format.
 
-## Libraries & Technologies
+## Libraries & Technologies 🛠️
 
   * **Backend**: Python 3.9
   * **PDF Parsing**: `PyMuPDF` (fitz), `pdfplumber`
@@ -41,7 +36,7 @@ The extraction process is handled by a sophisticated three-stage pipeline:
   * **Data Handling**: `numpy`
   * **Containerization**: Docker
 
-## Configuration
+## Configuration 🔧
 
 The application's behavior can be tuned via the `config.json` file located in the project root.
 
@@ -55,7 +50,7 @@ The application's behavior can be tuned via the `config.json` file located in th
   * `MAX_HEADING_LENGTH`: The maximum number of characters a line can have to be considered a heading.
   * `MIN_HEADING_CONFIDENCE`: A threshold from 0.0 to 1.0. Text blocks that score below this value will be discarded.
 
-## How to Build and Run
+## How to Build and Run 🚀
 
 ### Prerequisites
 
@@ -72,12 +67,16 @@ docker build -t pdf-outline-extractor .
 ### Step 2: Run the Extractor
 
 1.  Place your PDF files into the `input/` directory.
+
 2.  Run the following command. The container will automatically process all PDFs in the `input` folder.
 
-<!-- end list -->
-
-```bash
-docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output pdf-outline-extractor
-```
+      * **For Windows (Command Prompt):**
+        ```bash
+        docker run --rm -v "%cd%/input:/app/input" -v "%cd%/output:/app/output" pdf-outline-extractor
+        ```
+      * **For macOS / Linux (or PowerShell on Windows):**
+        ```bash
+        docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output pdf-outline-extractor
+        ```
 
 The structured JSON outlines will be generated in the `output/` directory, with each output file named after its corresponding PDF.
